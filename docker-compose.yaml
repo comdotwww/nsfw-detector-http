@@ -7,5 +7,26 @@ services:
     # 环境变量
     environment:
       - TOKEN=your_token_here
+      # 进程数。低配机器保持 1 即可；run.sh 会自动收敛到 min(4, 核数/2)
       - WORKERS=1
+      # 推理线程数，留空则由 run.sh 按 核数/WORKERS 自动计算
+      # - ORT_NUM_THREADS=2
+      # URL 结果缓存（默认开）。命中时延迟从 ~200ms 降到 <1ms
+      # 缓存是进程内的，多 worker 时每个 worker 各一份
+      # - CACHE_ENABLED=1
+      # - CACHE_MAX_SIZE=1000
+      # - CACHE_TTL=604800
+      # 服务器配了 HTTP_PROXY 但拉图不需要走代理时，置 0
+      # - HTTP_TRUST_ENV=0
+      # 日志级别，warning 可关掉 access log，减少磁盘写入
+      # - LOG_LEVEL=warning
+      # 关闭 /docs 与 /openapi.json（默认已关），需要调试时置 on
+      # - ENABLE_DOCS=off
+    # 低配机器建议显式限资源，避免推理把整机 CPU/内存吃满
+    # 参考：每 worker 常驻约 180MB
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 768M
     restart: always

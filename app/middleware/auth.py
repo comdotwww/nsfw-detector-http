@@ -1,37 +1,42 @@
-from fastapi import Request, HTTPException
-from app.utils.helper import show_json
+"""鉴权中间件。"""
+
+import hmac
+import os
 from typing import Callable
+
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
-# 管理员认证中间件
+# 启动时读一次，避免每个请求都查环境变量
+_TOKEN = os.getenv("TOKEN", "")
+# 首页与健康检查不鉴权
+_PUBLIC_PREFIXES = ("/docs", "/openapi.json", "/redoc")
+
+_INVALID_BODY = {"code": 401, "msg": "Token invalid"}
+
+
+def _invalid() -> JSONResponse:
+    return JSONResponse(status_code=401, content=_INVALID_BODY)
+
+
 async def auth(request: Request, call_next: Callable):
-    # 获取路由路径
+    if not _TOKEN:
+        return await call_next(request)
+
     path = request.url.path
-    # 首页根目录，不需要鉴权
-    if path == "/" or path.startswith("/docs"):
+    if path == "/" or path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
-    # 从环境变量中获取TOKEN
-    import os
-    os_token = os.getenv("TOKEN", "")
-    # print(f"Auth Middleware: os_token={os_token}")
-    # 如果没获取到，则不进行鉴权，直接放行
-    if not os_token:
-        return await call_next(request)
-    # 获取请求头中的token
-    auth = request.headers.get("Authorization")
-    if not auth:
-        return JSONResponse(status_code=401, content={"code": 401, "msg": "Token invalid"})
-    
-    # token的格式是Bearer xxx
-    parts = auth.split()
+
+    header = request.headers.get("Authorization")
+    if not header:
+        return _invalid()
+
+    parts = header.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        return JSONResponse(status_code=401, content={"code": 401, "msg": "Token invalid"})
-    # 从header中获取的token
-    header_token = parts[1]
-    # 与环境变量中的token对比
-    if header_token != os_token:
-        return JSONResponse(status_code=401, content={"code": 401, "msg": "Token invalid"})
-    
-    # 鉴权通过，放行
-    response = await call_next(request)
-    return response
+        return _invalid()
+
+    # 定长比较，避免时序侧信道
+    if not hmac.compare_digest(parts[1], _TOKEN):
+        return _invalid()
+
+    return await call_next(request)
