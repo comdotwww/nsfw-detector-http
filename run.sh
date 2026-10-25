@@ -105,8 +105,12 @@ HTTP_IMPL="${HTTP_IMPL:-auto}"
 # 启动前准备
 # ---------------------------------------------------------------------------
 activate_env() {
-    # shellcheck disable=SC1091
-    . myenv/bin/activate
+    # 容器镜像基于 python:3.13-slim，解释器已在 PATH 上，不需要 venv。
+    # 但如果是在宿主机上手动建了 myenv（旧部署方式），仍然激活它。
+    if [ -f myenv/bin/activate ]; then
+        # shellcheck disable=SC1091
+        . myenv/bin/activate
+    fi
 }
 
 # ---------------------------------------------------------------------------

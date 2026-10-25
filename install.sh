@@ -1,41 +1,30 @@
 #!/bin/bash
 set -e
 
-# 工作目录
 WORKDIR="/opt/nsfw"
+cd "${WORKDIR}"
 
-# 安装系统依赖
-install_deps(){
-    apt-get update
-    apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv procps
-    mkdir -p "${WORKDIR}" && cd "${WORKDIR}"
-}
-
-# 安装 Python 依赖
+# 安装 Python 依赖。
+#
+# 基础镜像 python:3.13-slim-trixie 已带解释器和 pip，所以这里：
+#   - 不需要 apt 装 python3 / python3-pip / python3-venv
+#   - 不需要 venv（单用途容器，直接装进系统 site-packages）
+#   - 不需要 procps（run.sh 里已经没有 pgrep 了）
+# 所有依赖都有 manylinux cp313 wheel，不会触发源码编译。
 install_python_deps(){
-    cd "${WORKDIR}"
-    python3 -m venv myenv
-    # shellcheck disable=SC1091
-    . myenv/bin/activate
-    # --no-cache-dir：不落 pip 缓存，直接省掉一层镜像体积
-    pip3 install --no-cache-dir --upgrade pip
-    pip3 install --no-cache-dir -r app/requirements.txt
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir -r app/requirements.txt
 }
 
 # 预编译字节码：多 worker 启动时每个进程都要 import 一遍 app，
 # 有 .pyc 能少一次解析编译（配合 Dockerfile 里的 PYTHONDONTWRITEBYTECODE=1）
 precompile(){
-    cd "${WORKDIR}"
-    # shellcheck disable=SC1091
-    . myenv/bin/activate
-    python3 -m compileall -q app || true
+    python -m compileall -q app || true
 }
 
 # 清理缓存，缩小镜像体积
 clean(){
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
+    rm -rf /tmp/* /root/.cache
 }
 
-install_deps && install_python_deps && precompile && clean
+install_python_deps && precompile && clean

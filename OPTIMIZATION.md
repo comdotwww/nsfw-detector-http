@@ -606,23 +606,26 @@ httptools（C 扩展）    1.21 µs/请求
 `fonts/element-icons.woff`（27.5KB）和 `.ttf`（54.6KB）在镜像上
 也都能正常取到（相对路径会跟着 CSS 的 URL 解析）。
 
-### 6.5 真实 NSFW 数据集验证
+### 6.5 真实 NSFW 数据集验证（你给的 10 张）
 
 ```
 #      nsfw     sfw     判定       qr        耗时   文件名
 1    0.9976  0.0024   NSFW  unknown      825ms   1.jpg
 2    0.9972  0.0028   NSFW  unknown      381ms   2.jpg
-3    0.9993  0.0007   NSFW  unknown      448ms   3.webp
-4    0.5595  0.4405    sfw  unknown      374ms   4.webp
-5    0.9173  0.0827   NSFW  unknown      376ms   5.webp
-6    0.0891  0.9109    sfw  unknown      388ms   6.webp
-7    0.9595  0.0405   NSFW  unknown      385ms   7.webp
-8    0.9962  0.0038   NSFW  unknown      369ms   8.webp
-9    0.9940  0.0060   NSFW  unknown      353ms   9.webp
-10   0.9932  0.0068   NSFW  unknown      404ms   10.webp
+3    0.9993  0.0007   NSFW  unknown      448ms   16.webp
+4    0.5595  0.4405    sfw  unknown      374ms   1.webp
+5    0.9173  0.0827   NSFW  unknown      376ms   1.webp
+6    0.0891  0.9109    sfw  unknown      388ms   1.webp
+7    0.9595  0.0405   NSFW  unknown      385ms   45.webp
+8    0.9962  0.0038   NSFW  unknown      369ms   1.webp
+9    0.9940  0.0060   NSFW  unknown      353ms   3.webp
+10   0.9932  0.0068   NSFW  unknown      404ms   21.webp
 
 10/10 成功，8 张判定 NSFW，中位耗时 383ms（含公网下载）
 ```
+
+> 4、5、6、8 号的文件名都是 `1.webp`（来自不同的图集目录），
+> 按序号区分即可，完整 URL 见 `test_dataset.py` 里的 `URLS` 列表。
 
 两点值得注意：
 
@@ -635,6 +638,50 @@ httptools（C 扩展）    1.21 µs/请求
 ---
 
 ## 七、部署配置建议
+
+### 7.1 基础镜像：Debian 12 → Debian 13
+
+原来的基础镜像是 `debian:12-slim`，需要 `apt-get install python3 python3-pip
+python3-venv` 再建 venv。换成 Debian 13 时有两条路，体积差别不小：
+
+| 方案 | 基础镜像（amd64 压缩） | 还需 apt 装 Python | 最终大小 |
+|---|---|---|---|
+| `debian:12-slim`（原来） | 26.9 MB | 是（Python 3.11） | 基准 |
+| `debian:13-slim` | 28.5 MB | 是（Python 3.13） | 比原来**更大** |
+| `python:3.13-slim-trixie` | 41.1 MB | **否** | 比原来**小约 30MB** |
+
+看起来反直觉：`debian:13-slim` 本身只比 12-slim 大 1.6MB，但走这条路
+还要 apt 装 python3.13 + pip + venv（安装后约 30MB），再加 venv 里那份
+pip 副本约 15MB —— 合计 70MB 上下，反而超过 `python:3.13-slim-trixie`
+的 41.1MB。
+
+**最终选了 `python:3.13-slim-trixie`**，理由：
+
+1. 解释器和 pip 已预编译，整条 apt 依赖链直接消失，构建更快、层更少；
+2. 不需要 venv（单用途容器），`run.sh` 里那句 `activate_env` 改成
+   「有 myenv 才激活」，宿主机老部署方式仍然兼容；
+3. Python 3.13 比 bookworm 的 3.11 新两个大版本；
+4. trixie 的安全支持到 ~2030，bookworm 到 2028-06。
+
+**迁移前验证过的三件事**（这几点不确认就换，构建必挂）：
+
+| 检查项 | 结果 |
+|---|---|
+| 依赖是否有 cp313 manylinux wheel | ✅ 27 个包全部有，`pip download --only-binary=:all:` 零源码包 |
+| `pydantic-core`（Rust）是否有 cp313 wheel | ✅ 2.50.1 有 manylinux_2_17 x86_64 |
+| `onnxruntime` 是否依赖 libgomp | ✅ **不依赖**，`libonnxruntime.so` 的 NEEDED 只有 libc / libstdc++ / libgcc_s，基础镜像都有 |
+
+最后一条是关键：很多 Debian slim 镜像要额外装 `libgomp1` 才能跑 onnxruntime。
+我直接下载了 wheel 检查 `libonnxruntime.so` 的动态依赖字符串，确认它没有
+`libgomp.so.1`，所以 `install.sh` 里可以**完全删掉 apt**。
+
+> ⚠️ 局限：本机没有 Docker，**我没能实际构建这个镜像**。
+> 上面的大小是按 Docker Hub 的镜像体积和 apt 包安装体积估算的，
+> wheel 可用性是通过 `pip download --platform manylinux_2_28_x86_64
+> --python-version 3.13` 验证的（这个等价于镜像里的解析结果）。
+> 请在你那边 `docker build` 一次确认，特别是 `docker images` 的实际体积。
+
+### 7.2 机器规格与并发配置
 
 `run.sh` 现在会自动算，一般不用手配。以下是不同规格机器的参考值：
 
@@ -707,6 +754,22 @@ httptools（C 扩展）    1.21 µs/请求
  app/data/config.toml    | 12 删除     只被 config.py 读取
 ```
 
+### 第三轮（基础镜像换 Debian 13）
+
+```
+ Dockerfile              | 11 → 40    debian:12-slim → python:3.13-slim-trixie
+ install.sh              | 27 → 30    删掉 apt 和 venv，直接 pip
+ run.sh                  | 161 → 165  activate_env 改成「有 myenv 才激活」
+```
+
+镜像体积变化（估算，未实际构建）：
+
+```
+旧：debian:12-slim 26.9 + apt python3.11 ~35 + venv pip 副本 ~15 + 依赖 ~105 + 模型 56
+新：python:3.13-slim-trixie 41.1 + 依赖 ~105 + 模型 56
+                                              ≈ 省 30MB，构建少一层 apt
+```
+
 ### 第一轮
 
 ```
@@ -724,7 +787,7 @@ httptools（C 扩展）    1.21 µs/请求
  run.sh                  |  71 → 184  重写（线程/worker 自适应、exec、反压）
 ```
 
-两轮下来最大的结构性变化不是行数，而是**职责收敛**：
+几轮下来最大的结构性变化不是行数，而是**职责收敛**：
 `url_check` 从 351 行降到 60 行，`upload_check` 从 90 行降到 46 行，
 推理/下载/解码/缓存全部收进 `engine.py` + `cache.py`，
 两条检测路径的行为从此保证一致（之前是各写一份、格式映射表都不统一）。
@@ -780,13 +843,18 @@ python bench_parser.py  # h11 vs httptools 解析层微基准
 | 项目 | 值 |
 |---|---|
 | CPU | 16 逻辑核（x86_64，Windows） |
-| Python | 3.13.12 |
+| Python | 3.13.12（与镜像内版本一致） |
+| 镜像基础 | `python:3.13-slim-trixie`（Debian 13） |
 | onnxruntime | 1.23.2（CPUExecutionProvider） |
 | onnx / onnxsim | 1.23.2 / 0.8.1 |
 | Pillow | 13.0.0（基准）/ 12.0.0（仓库 pin） |
 | httptools | 0.9.0 |
 | 模型 | `model_q4.onnx`，56MB，ViT-base，int4 权重（`MatMulNBits`） |
 | 输入 | `pixel_values`，动态 shape `(batch, 3, H, W)`，实际喂 384×384 |
+
+> 注意：性能数据全部在 Windows 上测的，镜像内是 Linux。
+> 同一份 ONNX 模型在两个平台上的推理耗时会有差异（通常 Linux 略快），
+> 但**优化前后的比值不受影响**。
 
 **方法的局限**：
 
