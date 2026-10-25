@@ -2,8 +2,6 @@
 
 # helloxz/nsfw
 
-![f28a9685fa1ffeff.png](https://img.rss.ink/imgs/2025/12/06/f28a9685fa1ffeff.png)
-
 ## About
 
 This project is based on [AdamCodd/vit-base-nsfw-detector/](https://huggingface.co/AdamCodd/vit-base-nsfw-detector/) and exposes an HTTP API for NSFW image detection. It is suitable for CPU-only inference and provides a lightweight implementation.
@@ -67,13 +65,13 @@ Then start: `docker-compose up -d`
 Without authentication:
 
 ```
-curl 'http://localhost:6086/api/url_check?url=https://www.imgurl.org/static/images/logo.png'
+curl 'http://localhost:6086/api/url_check?url=https://www.localhost.org/static/images/logo.png'
 ```
 
 With authentication:
 
 ```
-curl 'http://localhost:6086/api/url_check?url=https://www.imgurl.org/static/images/logo.png' \
+curl 'http://localhost:6086/api/url_check?url=https://www.localhost.org/static/images/logo.png' \
 --header 'Authorization: Bearer your_token_here'
 ```
 
@@ -105,20 +103,8 @@ curl --location --request POST 'http://localhost:6086/api/upload_check' \
 - data.nsfw: Risk score [0.0–1.0]. Higher means more risky.
 - is_nsfw: Considered NSFW when nsfw >= 0.8. You can also decide based on the nsfw score threshold that fits your use case.
 
-### Demo
-
-- Test URL: [https://nsfw.demo.mba](https://nsfw.demo.mba)
-
-> The demo is rate limited and for testing only. Do not use it for other purposes.
 
 ## Notice
 
 This project is for learning and testing only. Do not use it for commercial or production environments. You assume all related risks and liabilities.
 
-## Other projects
-
-If you are interested, check out our other products:
-
-- [Zdir](https://www.zdir.pro/zh/) - A lightweight and versatile file sharing program.
-- [OneNav](https://www.onenav.top/) - An efficient browser bookmark manager for centralized management of your bookmarks.
-- [Zurl](https://github.com/helloxz/zurl) - A simple and practical URL shortener to quickly create, share, and manage short links.
