@@ -8,7 +8,7 @@ INDEX_HTML_PATH = os.getenv("INDEX_HTML_PATH", "app/static/html/index.html")
 
 FALLBACK_HTML = (
     "<h3>NSFW Detection API is running.</h3>"
-    "<p>Please visit <a href='https://github.com/helloxz/nsfw' target='_blank'>"
+    "<p>Please visit <a href='https://github.com/comdotwww/nsfw-detector-http' target='_blank'>"
     "Github</a> to view the usage instructions.</p>"
 )
 
