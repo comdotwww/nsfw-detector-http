@@ -2,8 +2,6 @@
 
 # helloxz/nsfw
 
-![3953634eea02b6e7.png](https://img.rss.ink/imgs/2025/12/06/3953634eea02b6e7.png)
-
 ## 关于
 
 此项目基于[AdamCodd/vit-base-nsfw-detector/](https://huggingface.co/AdamCodd/vit-base-nsfw-detector/) 实现，并封装为HTTP API调用，可用于识别网络色情图像（nsfw识别），适合纯CPU机器推理，轻量级实现方案。
@@ -68,13 +66,13 @@ services:
 GET请求方式（不使用鉴权）：
 
 ```
-curl 'http://localhost:6086/api/url_check?url=https://www.imgurl.org/static/images/logo.png'
+curl 'http://localhost:6086/api/url_check?url=https://www.localhost.org/static/images/logo.png'
 ```
 
 GET请求方式（启用鉴权）：
 
 ```
-curl 'http://localhost:6086/api/url_check?url=https://www.imgurl.org/static/images/logo.png' \
+curl 'http://localhost:6086/api/url_check?url=https://www.localhost.org/static/images/logo.png' \
 --header 'Authorization: Bearer your_token_here'
 ```
 
@@ -120,20 +118,7 @@ curl --location --request POST 'http://localhost:6086/api/upload_check' \
 * `data.nsfw`：风险系数 `[0.0-1.0]`，值越高表示风险越高
 * `is_nsfw`：当`nsfw>=0.8`时判定为色情图像，也可以自行根据`nsfw`分险系数判断
 
-### Demo
-
-* 测试地址：[https://nsfw.demo.mba](https://nsfw.demo.mba)
-
-> 测试地址存在限流设置，仅供测试使用，请勿用于其它用途！
 
 ## 注意
 
 此项目仅供学习和测试使用，请勿用于商业用途和生产环境，相关风险和责任需要您自行承担！
-
-## 其它项目
-
-如果您有兴趣，还可以了解我们的其他产品。
-
-* [Zdir](https://www.zdir.pro/zh/) - 一款轻量级、多功能的文件分享程序。
-* [OneNav](https://www.onenav.top/) - 高效的浏览器书签管理工具，将您的书签集中式管理。
-* [Zurl](https://github.com/helloxz/zurl) - Zurl 是一款简单且实用的短链接系统，可以快速生成短链接，方便分享和管理。
