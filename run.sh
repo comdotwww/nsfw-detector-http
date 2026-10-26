@@ -27,6 +27,11 @@ APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_PORT="${APP_PORT:-6086}"
 LOG_LEVEL="${LOG_LEVEL:-warning}"
 
+# 独立管理端口
+ADMIN_ENABLED="${ADMIN_ENABLED:-1}"
+ADMIN_HOST="${ADMIN_HOST:-127.0.0.1}"
+ADMIN_PORT="${ADMIN_PORT:-6087}"
+
 # ---------------------------------------------------------------------------
 # CPU 核数
 # ---------------------------------------------------------------------------
@@ -114,6 +119,21 @@ activate_env() {
 }
 
 # ---------------------------------------------------------------------------
+# Token 管理端口（独立进程，默认 6087，只监听 localhost）
+# ---------------------------------------------------------------------------
+runAdmin() {
+    echo "[run.sh] admin port=$ADMIN_PORT admin_host=$ADMIN_HOST"
+    # 不带 exec：用 & 后台启动，主服务在前台，trap 清理
+    uvicorn app.admin:admin_app \
+        --host "$ADMIN_HOST" \
+        --port "$ADMIN_PORT" \
+        --log-level "$LOG_LEVEL" &
+    ADMIN_PID=$!
+    # trap 保证主服务退出时管理端口也跟着退
+    trap 'kill $ADMIN_PID 2>/dev/null || true' EXIT
+}
+
+# ---------------------------------------------------------------------------
 # 生产模式
 # ---------------------------------------------------------------------------
 runMain() {
@@ -122,6 +142,11 @@ runMain() {
          "log_level=$LOG_LEVEL"
 
     activate_env
+
+    # 独立管理端口；ADMIN_ENABLED=0 可关闭
+    if [ "${ADMIN_ENABLED:-1}" = "1" ]; then
+        runAdmin
+    fi
 
     # exec 让 uvicorn 接管 PID 1，docker stop 的 SIGTERM 才能正确送达，
     # 否则要等 10s 超时才被强杀，重启期间请求直接断掉。

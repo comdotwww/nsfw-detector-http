@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NSFW Detector</title>
+  <!-- 依赖走 npmmirror 镜像（unpkg.com 在国内经常慢或不可达），版本已 pin 死 -->
   <link rel="preconnect" href="https://registry.npmmirror.com" crossorigin />
   <link rel="stylesheet" href="https://registry.npmmirror.com/element-ui/2.15.14/files/lib/theme-chalk/index.css" />
   <script src="https://registry.npmmirror.com/vue/2.7.16/files/dist/vue.min.js"></script>
@@ -444,7 +445,7 @@
         </div>
       </div>
       <div class="footer">
-        <p>Powered by <a href="https://github.com/comdotwww/nsfw-detector-http" rel="nofollow" target="_blank">comdotwww/nsfw-detector-http</a></p>
+        <p>Powered by <a href="https://github.com/helloxz/nsfw" rel="nofollow" target="_blank">helloxz/nsfw</a></p>
       </div>
     </div>
   </div>
@@ -494,7 +495,7 @@
           }
         },
         goToGitHub() {
-          window.open('https://github.com/comdotwww/nsfw-detector-http', '_blank');
+          window.open('https://github.com/helloxz/nsfw', '_blank');
         },
         handleFileChange(file, fileList) {
           this.resetState();

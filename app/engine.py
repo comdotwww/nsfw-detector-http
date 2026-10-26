@@ -30,7 +30,12 @@ INPUT_SIZE = 384
 
 # 单张图片上限：对 384x384 分类器来说 10MB 已经很宽松，低配机器可调小
 MAX_SIZE = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
-NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.8"))
+
+# 判定阈值：nsfw 概率大于该值才标记 is_nsfw。
+# 注意这是「严格大于」，阈值 0.9 时 0.9 本身不算 NSFW。
+# 调高 = 更宽松（漏检变多），调低 = 更严格（误判变多）。
+# 只影响 is_nsfw 这个布尔值，返回的 nsfw 概率始终是 0~1 原始值。
+NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.9"))
 
 # 解压炸弹防护：10MB 的 PNG 可以解出上亿像素，直接打爆内存
 MAX_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "64000000"))  # ~8000x8000
@@ -57,8 +62,12 @@ UA = (
     "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
 
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "20"))
-HTTP_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "5"))
+# 拉图超时。connect 单独给是因为境外 CDN 建连经常要好几秒：
+# 实测 cdn.jliji.com 在拥塞时段建连就要 5.5s，原来 5s 的 connect 会直接
+# 误判成超时（报 "Request timed out"）。这里放宽到 10s。
+# 总超时（读 body）给 30s，足够拉完 10MB。
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "30"))
+HTTP_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "10"))
 # 是否继承系统代理（HTTP_PROXY/HTTPS_PROXY）。默认保持 httpx 的行为。
 # 如果服务器上配了代理但拉图不需要走代理，置 0 可以少一跳、也避免内网地址被代理掉。
 HTTP_TRUST_ENV = os.getenv("HTTP_TRUST_ENV", "1") == "1"
@@ -172,6 +181,20 @@ def _softmax2(a: float, b: float) -> Tuple[float, float]:
     return ea / s, eb / s
 
 
+def build_result(sfw: float, nsfw: float, qr_status: str = "unknown") -> dict:
+    """组装返回体，按当前 NSFW_THRESHOLD 判定 is_nsfw。
+
+    推理结果和缓存命中都走这里，保证两条路径的阈值语义完全一致；
+    同时因为阈值是读取时才算的，改了阈值不用清缓存。
+    """
+    return {
+        "sfw": round(float(sfw), 4),
+        "nsfw": round(float(nsfw), 4),
+        "is_nsfw": float(nsfw) > NSFW_THRESHOLD,
+        "qr_status": qr_status,
+    }
+
+
 def infer_sync(image: Image.Image) -> dict:
     sess = get_session()
     logits = np.asarray(sess.run(None, {_input_name: preprocess(image)})[0])
@@ -179,11 +202,7 @@ def infer_sync(image: Image.Image) -> dict:
         logits = logits[0]
     logits = logits.reshape(-1)
     sfw_raw, nsfw_raw = _softmax2(float(logits[0]), float(logits[1]))
-    return {
-        "sfw": round(sfw_raw, 4),
-        "nsfw": round(nsfw_raw, 4),
-        "is_nsfw": nsfw_raw > NSFW_THRESHOLD,
-    }
+    return build_result(sfw_raw, nsfw_raw)
 
 
 _sem: Optional[asyncio.Semaphore] = None

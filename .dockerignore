@@ -1,0 +1,35 @@
+# 构建上下文排除项：减小镜像构建时发送给 Docker daemon 的体积，
+# 同时避免把运行时数据、密钥、本地虚拟环境打进镜像。
+
+# 版本控制
+.git
+.gitignore
+
+# 运行时数据（数据库里可能有 token 哈希和调用记录，绝不能进镜像）
+data
+*.db
+*.db-wal
+*.db-shm
+
+# Python 缓存
+__pycache__
+*.pyc
+*.pyo
+myenv
+.venv
+venv
+
+# 文档与本地脚本（Dockerfile 只 COPY install.sh / run.sh / app）
+README.md
+README_en.md
+*.md
+build.sh
+docker-compose.yaml
+.dockerignore
+
+# 测试与临时文件
+test_*.py
+bench_*.py
+tmp
+tmp_*
+*.log

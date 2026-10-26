@@ -1,36 +1,56 @@
 services:
-  nsfw-detector-http:
-    build: .
-    container_name: nsfw-detector-http
+  nsfw:
+    container_name: nsfw
+    # 用本地 Dockerfile 构建，不拉取远程镜像。
+    # 首次启动会自动构建；也可以先 ./build.sh 再 up。
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nsfw:local
     ports:
       - "6086:6086"
-    # --- 资源限制 ---
-    # 低配机器建议显式限资源，避免推理把整机 CPU/内存吃满
-    # 参考：每 worker 常驻约 180MB
-    cpus: 2.0
-    mem_limit: 500m
-    memswap_limit: 1g
-    pids_limit: 512
-    # --- 可选：软预留，调度用 ---
-    # mem_reservation: 256m
+      # Token 管理端口（默认只监听 localhost，外部访问需配合 SSH 隧道 / 反代）
+      - "6087:6087"
     # 环境变量
     environment:
-      - TOKEN=2333
+      # 管理密钥：管理页面登录用。设置后旧的 TOKEN 环境变量不再用于鉴权
+      - ADMIN_TOKEN=your_admin_token_here
+      # 兼容旧逻辑：设置后仍可用单一 TOKEN 鉴权（可选）
+      # - TOKEN=your_token_here
+      # 判定阈值：nsfw 概率 > 该值时 is_nsfw 为 true。
+      # 调高更宽松（漏检变多），调低更严格（误判变多）。
+      # 只影响 is_nsfw 布尔值，返回的 nsfw 概率始终是 0~1 原始值。
+      - NSFW_THRESHOLD=0.9
       # 进程数。低配机器保持 1 即可；run.sh 会自动收敛到 min(4, 核数/2)
       - WORKERS=1
+      # Token 管理端口（默认 6087，只监听 localhost；想对外暴露改 0.0.0.0）
+      # - ADMIN_ENABLED=1
+      # - ADMIN_PORT=6087
+      # - ADMIN_HOST=127.0.0.1
       # 推理线程数，留空则由 run.sh 按 核数/WORKERS 自动计算
-      - ORT_NUM_THREADS=2
-      # URL 结果缓存（默认开）。命中时延迟从 ~200ms 降到 <1ms
-      # 缓存是进程内的，多 worker 时每个 worker 各一份
-      - CACHE_ENABLED=1
-      - CACHE_MAX_SIZE=1000
-      - CACHE_TTL=604800
+      # - ORT_NUM_THREADS=2
+      # URL 结果缓存（默认开）。命中时延迟从 ~200ms 降到 <1ms。
+      # 存在 SQLite 里，多 worker 共享同一份，重启不丢。
+      # - CACHE_ENABLED=1
+      # - CACHE_DB_PATH=/opt/nsfw/data/cache.db
+      # - CACHE_MAX_SIZE=1000        # 条目上限，0 = 不限
+      # - CACHE_TTL=604800           # 秒，默认 7 天
       # 服务器配了 HTTP_PROXY 但拉图不需要走代理时，置 0
-      - HTTP_TRUST_ENV=0
+      # - HTTP_TRUST_ENV=0
       # 日志级别，warning 可关掉 access log，减少磁盘写入
-      - LOG_LEVEL=warning
+      # - LOG_LEVEL=warning
       # 关闭 /docs 与 /openapi.json（默认已关），需要调试时置 on
-      - ENABLE_DOCS=off
-      # 是否启用WEBUI，参数值为off/on，默认off不启用
-      - WEBUI=off
-    restart: unless-stopped
+      # - ENABLE_DOCS=off
+    # 缓存库与 token 库都落在宿主机 ./data，方便备份/迁移/查看。
+    # 在线备份缓存：docker compose exec nsfw python -m app.cache /opt/nsfw/data/cache-backup.db
+    # 备份 token 库：先 docker compose stop，再拷 data/tokens.db（WAL 模式下运行中拷会漏数据）
+    volumes:
+      - ./data:/opt/nsfw/data
+    # 低配机器建议显式限资源，避免推理把整机 CPU/内存吃满
+    # 参考：每 worker 常驻约 180MB
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 768M
+    restart: always

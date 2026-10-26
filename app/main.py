@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import engine
+from app import cache, engine, tokens
 from app.api import index as index_api
 from app.middleware.auth import auth
 from app.routers import router as my_router
@@ -15,10 +15,15 @@ async def lifespan(app: FastAPI):
     # 启动：加载模型 + 预热，避免首次请求承担权重预打包开销
     engine.init()
     index_api.preload()
+    # 建缓存表并清理过期数据（失败只告警，会降级为无缓存模式）
+    await cache.init()
+    # 建 token 表（失败会 fail-closed，鉴权全部拒绝）
+    await tokens.init()
     try:
         yield
     finally:
         await engine.close_http()
+        await cache.close()
 
 
 # 默认关闭 /docs 与 /openapi.json：低配机器上没必要为它生成并驻留 schema

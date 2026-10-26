@@ -1,2 +1,9 @@
 myenv
 __pycache__
+*.pyc
+
+# 缓存数据库（含 WAL 临时文件），运行时产物不入库
+data/
+*.db
+*.db-wal
+*.db-shm
