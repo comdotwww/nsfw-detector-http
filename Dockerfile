@@ -30,6 +30,12 @@ COPY app ./app
 
 RUN bash install.sh
 
+# 安装 curl，并清理 apt 缓存以减小镜像体积
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 EXPOSE 6086
 
 # 用 python 做健康检查，避免额外装 curl / wget
