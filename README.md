@@ -57,7 +57,7 @@
 ### 方式一：Docker Compose（推荐）
 
 ```bash
-git clone <本仓库地址> nsfw
+git clone https://github.com/comdotwww/nsfw-detector-http nsfw
 cd nsfw
 
 # 1. 设置管理密钥（务必改掉默认值）

@@ -57,7 +57,7 @@ Two ways to call it: pass an image URL, or upload a file. It returns a `0-1` ris
 ### Option 1: Docker Compose (recommended)
 
 ```bash
-git clone <this repo> nsfw
+git clone https://github.com/comdotwww/nsfw-detector-http nsfw
 cd nsfw
 
 # 1. Set your admin secret (do not keep the default)
