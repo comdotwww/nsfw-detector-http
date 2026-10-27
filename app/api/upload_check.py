@@ -5,7 +5,7 @@ from fastapi import Request, UploadFile
 from app import engine
 from app.utils.helper import show_json
 
-MODEL_NOT_READY = "Model not initialized, please check model_q4.onnx exists and is loadable."
+MODEL_NOT_READY = "Model not initialized, please check model_nsfw_int8.onnx exists and is loadable."
 
 
 class UploadCheckHandler:

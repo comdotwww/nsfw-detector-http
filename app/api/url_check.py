@@ -5,7 +5,7 @@ import re
 from app import cache, engine
 from app.utils.helper import show_json
 
-MODEL_NOT_READY = "Model not initialized, please check model_q4.onnx exists and is loadable."
+MODEL_NOT_READY = "Model not initialized, please check model_nsfw_int8.onnx exists and is loadable."
 
 
 def _is_valid_url(url) -> bool:

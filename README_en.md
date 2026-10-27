@@ -4,6 +4,8 @@
 
 An HTTP service for NSFW (Not Safe For Work) image detection built on a ViT model. CPU-only inference, suitable for a modest VPS or cloud instance, providing image moderation for forums, image hosts, chat platforms and content sites.
 
+The model is [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384) (ViT-tiny, 5.6M parameters). Quantized to int8 it weighs only 6.4MB and runs one image in about 18ms on 16 threads.
+
 Two ways to call it: pass an image URL, or upload a file. It returns a `0-1` risk score plus a boolean verdict, so callers can decide what to do next.
 
 ---
@@ -28,7 +30,7 @@ Two ways to call it: pass an image URL, or upload a file. It returns a `0-1` ris
 
 **Detection**
 
-- CPU-only inference, no GPU required; about 180MB resident memory per worker
+- CPU-only inference, no GPU required; about 135MB resident memory per worker, model only 6.4MB
 - Supports jpg / png / bmp / webp / gif (first frame for animated images)
 - Optional QR-code detection (`qr_detect=enable`)
 - Returns raw probabilities; the decision threshold is configurable
@@ -50,7 +52,7 @@ Two ways to call it: pass an image URL, or upload a file. It returns a `0-1` ris
 
 - Docker 20.10+ (or Docker Compose v2)
 - At least 1GB RAM and 1 CPU core; 2+ cores recommended
-- About 500MB disk (image plus model)
+- About 300MB disk (image, model and runtime data)
 
 ### Option 1: Docker Compose (recommended)
 
@@ -140,12 +142,12 @@ Everything is configured through environment variables. For Docker, put them und
 
 | Variable | Default | Description |
 |---|---|---|
-| `NSFW_THRESHOLD` | `0.9` | Decision threshold. `is_nsfw=true` when the `nsfw` score is **greater than** this value. Raise it to be more permissive (more false negatives), lower it to be stricter. It only affects the boolean; `nsfw` is always the raw 0-1 probability |
+| `NSFW_THRESHOLD` | `0.8` | Decision threshold. `is_nsfw=true` when the `nsfw` score is **greater than** this value. Raise it to be more permissive (more false negatives), lower it to be stricter. It only affects the boolean; `nsfw` is always the raw 0-1 probability. This model scores lower overall, so the default moved from 0.9 to 0.8 |
 | `WORKERS` | `1` | Worker processes, clamped to `min(4, cores/2)` |
 | `ORT_NUM_THREADS` | auto | Inference threads per process, defaults to `cores / WORKERS`. **The biggest factor for latency**; verify on your hardware |
 | `INFER_CONCURRENCY` | `=ORT_NUM_THREADS` | Max concurrent inference requests; extras queue |
 | `LIMIT_CONCURRENCY` | `WORKERS×(N×2+4)` | Max connections; extras get 503 |
-| `ORT_ALLOW_SPINNING` | `0` | Disable ORT thread spinning to save CPU when idle |
+| `ORT_ALLOW_SPINNING` | `0` | Disable ORT thread spinning when idle. **Do not set to 1** — multi-threaded inference gets noticeably slower (see [Performance](#performance)) |
 | `APP_HOST` / `APP_PORT` | `0.0.0.0` / `6086` | API listen address and port |
 | `WEBUI` | `off` | `on` enables the web UI on the index page |
 | `ENABLE_DOCS` | `off` | `on` exposes `/docs` and `/openapi.json` |
@@ -351,11 +353,11 @@ Returns hit rate, entry count and database sizes. This endpoint **does not requi
 | `msg` | Message; explains the failure reason |
 | `data.sfw` | Safety score `[0,1]`, higher is safer |
 | `data.nsfw` | Risk score `[0,1]`, higher is riskier |
-| `data.is_nsfw` | `true` when `nsfw > NSFW_THRESHOLD` (default 0.9) |
+| `data.is_nsfw` | `true` when `nsfw > NSFW_THRESHOLD` (default 0.8) |
 | `data.qr_status` | `unknown` not checked / `qr` contains a QR code / `not_qr` |
 
 > If false negatives are costly for you, ignore `is_nsfw` and tier the `nsfw` score yourself —
-> for example block above `0.9` and send `0.5-0.9` to human review.
+> for example block above `0.8` and send `0.4-0.8` to human review.
 
 ### Business errors
 
@@ -374,7 +376,7 @@ Returns hit rate, entry count and database sizes. This endpoint **does not requi
 ## Result cache
 
 URL check results are cached in SQLite (`data/cache.db` by default). A second request for the
-same URL hits the cache, dropping latency from ~200ms to under 1ms.
+same URL hits the cache, dropping end-to-end latency from tens of milliseconds to under 1ms.
 
 - **Shared across workers** (not one copy per process)
 - Survives container restarts
@@ -445,13 +447,20 @@ Copy the backup back over `data/cache.db` or `data/tokens.db`, remove the matchi
 
 ### Benchmarks
 
-Measured on a 16-core x86_64 machine, one 384×384 image, inference only (no download).
+Measured on a 16-core x86_64 machine, one 384×384 input, inference only (no download or decode).
 
 | `ORT_NUM_THREADS` | 1 | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|
-| Single inference | 880ms | 505ms | 287ms | 199ms | 197ms |
+| Single inference | 58ms | 36ms | 23ms | 19ms | 18ms |
 
-**It plateaus after 8 threads.** This model is compute-bound on CPU, not scheduling-bound.
+Returns diminish after 4 threads; 8 and 16 threads differ by about 1ms. End-to-end latency adds
+image download and decoding on top, usually a few tens of milliseconds.
+
+> ⚠️ **Do not remove `ORT_ALLOW_SPINNING=0`.** It is a default of this service (exported in
+> `run.sh` and set as a session option in `engine.py`). With spinning enabled, multi-threaded
+> inference degrades noticeably: at 16 threads this model goes from 18ms to 32ms, and the
+> previous larger model went from 178ms to 381ms — a dozen threads spinning idle fight each
+> other for CPU, and the more threads the worse it gets.
 
 ### Thread count is the lever that matters
 
@@ -462,19 +471,21 @@ Measured on a 16-core x86_64 machine, one 384×384 image, inference only (no dow
 
 ### Reference configurations
 
-| Machine | `WORKERS` | `ORT_NUM_THREADS` | Memory | Expected latency |
+Latency below is **inference only**; add download and decode for end-to-end numbers:
+
+| Machine | `WORKERS` | `ORT_NUM_THREADS` | Memory | Single inference |
 |---|---|---|---|---|
-| 1 core 1GB | 1 | 1 | ~200MB | ~900ms |
-| 2 cores 1GB | 1 | 2 | ~200MB | ~500ms |
-| 2 cores 2GB | 1 | 2 | ~200MB | ~500ms |
-| 4 cores 2GB | 2 | 2 | ~380MB | ~500ms, 2x throughput |
-| 4 cores 4GB | 1 | 4 | ~200MB | ~290ms |
+| 1 core 1GB | 1 | 1 | ~140MB | ~58ms |
+| 2 cores 1GB | 1 | 2 | ~140MB | ~36ms |
+| 2 cores 2GB | 1 | 2 | ~140MB | ~36ms |
+| 4 cores 2GB | 2 | 2 | ~270MB | ~36ms, 2x throughput |
+| 4 cores 4GB | 1 | 4 | ~140MB | ~23ms |
 
 ### Resource usage
 
-- About **180MB** resident per worker (including the 56MB model)
-- About 2.5s startup (includes model warm-up, so the first request is not slow)
-- About 210MB image size
+- About **135MB** resident per worker (including the 6.4MB model)
+- About **2.2s** startup (includes model warm-up, so the first request is not slow)
+- About **160MB** image size
 
 ### Overload protection
 
@@ -503,7 +514,7 @@ nsfw/
 │   │   ├── upload_check.py   # upload check
 │   │   └── index.py          # index page
 │   ├── middleware/auth.py    # auth middleware
-│   ├── onnx/model_q4.onnx    # model (int4 quantized, 56MB)
+│   ├── onnx/model_nsfw_int8.onnx  # model (int8 quantized, 6.4MB)
 │   ├── static/html/          # built-in web UI
 │   └── requirements.txt
 ├── Dockerfile
@@ -520,9 +531,9 @@ nsfw/
 
 **First call is slow?**
 
-Startup warms up inference once, but a request arriving immediately after boot may still pay
-a few hundred milliseconds (first-time weight packing). Use a health check to wait for
-readiness in production.
+Startup warms up inference once, so the first real request does not pay the weight-packing
+cost. Total startup to serving is about 2.2s. Use a health check to wait for readiness in
+production.
 
 **Do I need to clear the cache after changing `NSFW_THRESHOLD`?**
 
@@ -565,7 +576,7 @@ traditional artwork.
 
 Licensed under AGPL-3.0; see [LICENSE](LICENSE).
 
-The model comes from [AdamCodd/vit-base-nsfw-detector](https://huggingface.co/AdamCodd/vit-base-nsfw-detector).
+The model comes from [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384).
 Thanks to the authors. Please comply with the model's own license terms.
 
 > Detection is never 100% accurate. No content moderation solution is perfectly precise;

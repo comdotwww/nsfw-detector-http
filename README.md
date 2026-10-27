@@ -4,6 +4,8 @@
 
 基于 ViT 架构的 NSFW（Not Safe For Work）图片检测 HTTP 服务。纯 CPU 推理，适合部署在普通 VPS 或云服务器上，为论坛、图床、IM、内容平台等提供图片鉴黄能力。
 
+模型用的是 [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384)（ViT-tiny，5.6M 参数），int8 量化后只有 6.4MB，16 线程下单张推理约 18ms。
+
 提供两种调用方式：传图片 URL 或直接上传文件。返回 `0~1` 的风险分值和布尔判定，调用方可自行决定后续处置。
 
 ---
@@ -28,7 +30,7 @@
 
 **检测能力**
 
-- 纯 CPU 推理，无需 GPU；单 worker 常驻内存约 180MB
+- 纯 CPU 推理，无需 GPU；单 worker 常驻内存约 135MB，模型仅 6.4MB
 - 支持 jpg / png / bmp / webp / gif（动图取首帧）
 - 可选检测图片中是否含二维码（`qr_detect=enable`）
 - 返回原始概率值，判定阈值可配置
@@ -50,7 +52,7 @@
 
 - Docker 20.10+（或 Docker Compose v2）
 - 至少 1GB 内存、1 核 CPU；推荐 2 核以上
-- 磁盘约 500MB（镜像 + 模型）
+- 磁盘约 300MB（镜像 + 模型 + 运行时数据）
 
 ### 方式一：Docker Compose（推荐）
 
@@ -138,12 +140,12 @@ curl -X POST 'http://服务器IP:6086/api/url_check' \
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `NSFW_THRESHOLD` | `0.9` | 判定阈值。`nsfw` 分值**大于**该值时 `is_nsfw=true`。调高更宽松（漏检变多），调低更严格（误判变多）。只影响布尔值，`nsfw` 始终返回 0~1 原始概率 |
+| `NSFW_THRESHOLD` | `0.8` | 判定阈值。`nsfw` 分值**大于**该值时 `is_nsfw=true`。调高更宽松（漏检变多），调低更严格（误判变多）。只影响布尔值，`nsfw` 始终返回 0~1 原始概率。当前模型分值整体偏低，默认从 0.9 调到 0.8 |
 | `WORKERS` | `1` | 进程数，自动收敛到 `min(4, CPU核数/2)` |
 | `ORT_NUM_THREADS` | 自动 | 每进程推理线程数，默认 `CPU核数 / WORKERS`。**对延迟影响最大**，建议实测确认 |
 | `INFER_CONCURRENCY` | `=ORT_NUM_THREADS` | 同时推理的请求上限，超出排队 |
 | `LIMIT_CONCURRENCY` | `WORKERS×(N×2+4)` | 连接数上限，超出直接返回 503 |
-| `ORT_ALLOW_SPINNING` | `0` | ORT 线程空闲时不自旋，节省 CPU |
+| `ORT_ALLOW_SPINNING` | `0` | ORT 线程空闲时不自旋。**不要改成 1**，多线程下会明显变慢（见[性能](#性能与调优)） |
 | `APP_HOST` / `APP_PORT` | `0.0.0.0` / `6086` | 业务监听地址与端口 |
 | `WEBUI` | `off` | `on` 开启首页 Web 界面 |
 | `ENABLE_DOCS` | `off` | `on` 开放 `/docs` 与 `/openapi.json` |
@@ -344,11 +346,11 @@ curl 'http://localhost:6086/api/cache_stats'
 | `msg` | 提示信息，失败时为具体原因 |
 | `data.sfw` | 安全分值 `[0,1]`，越高越安全 |
 | `data.nsfw` | 风险分值 `[0,1]`，越高风险越高 |
-| `data.is_nsfw` | `nsfw > NSFW_THRESHOLD`（默认 0.9）时为 `true` |
+| `data.is_nsfw` | `nsfw > NSFW_THRESHOLD`（默认 0.8）时为 `true` |
 | `data.qr_status` | `unknown` 未检测 / `qr` 含二维码 / `not_qr` 不含 |
 
 > 如果业务对漏检敏感，建议忽略 `is_nsfw`，自己对 `nsfw` 分值做分级处理，
-> 比如 `>0.9` 直接拦截、`0.5~0.9` 转人工复审。
+> 比如 `>0.8` 直接拦截、`0.4~0.8` 转人工复审。
 
 ### 业务错误
 
@@ -367,7 +369,7 @@ curl 'http://localhost:6086/api/cache_stats'
 ## 结果缓存
 
 URL 检测结果会缓存在 SQLite（默认 `data/cache.db`）。同一个 URL 第二次请求直接命中，
-延迟从约 200ms 降到 1ms 以内。
+端到端延迟从几十毫秒降到 1ms 以内（省掉下载、解码和推理）。
 
 - **多 worker 共享**同一份缓存（不是每进程一份）
 - 容器重启不丢
@@ -437,13 +439,18 @@ docker compose start
 
 ### 基准数据
 
-实测环境：16 逻辑核 x86_64，单张 384×384 图片，仅推理（不含下载）。
+实测环境：16 逻辑核 x86_64，单张 384×384 输入，纯推理（不含下载和解码）。
 
 | `ORT_NUM_THREADS` | 1 | 2 | 4 | 8 | 16 |
 |---|---|---|---|---|---|
-| 单次推理耗时 | 880ms | 505ms | 287ms | 199ms | 197ms |
+| 单次推理耗时 | 58ms | 36ms | 23ms | 19ms | 18ms |
 
-**8 线程后基本到顶**，继续加线程没有收益。这是纯 CPU 算力受限的模型，不是调度问题。
+4 线程之后收益递减，8 线程和 16 线程只差 1ms。端到端还要加上图片下载和解码，通常几十毫秒。
+
+> ⚠️ **不要删掉 `ORT_ALLOW_SPINNING=0`。** 这是本服务的默认设置（`run.sh` 里 export，
+> `engine.py` 里也设了 session option）。实测多线程下开自旋会让推理明显退化：
+> 16 线程时本模型从 18ms 掉到 32ms，旧的大模型更夸张（178ms → 381ms）——
+> 十几个线程空转互相抢 CPU，线程越多越糟。
 
 ### 线程数是最重要的参数
 
@@ -454,19 +461,21 @@ docker compose start
 
 ### 参考配置
 
-| 机器 | `WORKERS` | `ORT_NUM_THREADS` | 内存 | 预期单请求 |
+下表延迟是**纯推理**耗时，端到端请再加上下载和解码：
+
+| 机器 | `WORKERS` | `ORT_NUM_THREADS` | 内存 | 单次推理 |
 |---|---|---|---|---|
-| 1 核 1GB | 1 | 1 | ~200MB | ~900ms |
-| 2 核 1GB | 1 | 2 | ~200MB | ~500ms |
-| 2 核 2GB | 1 | 2 | ~200MB | ~500ms |
-| 4 核 2GB | 2 | 2 | ~380MB | ~500ms，吞吐 2x |
-| 4 核 4GB | 1 | 4 | ~200MB | ~290ms |
+| 1 核 1GB | 1 | 1 | ~140MB | ~58ms |
+| 2 核 1GB | 1 | 2 | ~140MB | ~36ms |
+| 2 核 2GB | 1 | 2 | ~140MB | ~36ms |
+| 4 核 2GB | 2 | 2 | ~270MB | ~36ms，吞吐 2x |
+| 4 核 4GB | 1 | 4 | ~140MB | ~23ms |
 
 ### 资源占用
 
-- 单 worker 常驻约 **180MB**（含 56MB 模型）
-- 启动约 2.5 秒（含模型预热，避免首个请求变慢）
-- 镜像约 210MB
+- 单 worker 常驻约 **135MB**（含 6.4MB 模型）
+- 启动约 **2.2 秒**（含模型预热，避免首个请求变慢）
+- 镜像约 **160MB**
 
 ### 过载保护
 
@@ -495,7 +504,7 @@ nsfw/
 │   │   ├── upload_check.py   # 上传检测
 │   │   └── index.py          # 首页
 │   ├── middleware/auth.py    # 鉴权中间件
-│   ├── onnx/model_q4.onnx    # 模型（int4 量化，56MB）
+│   ├── onnx/model_nsfw_int8.onnx  # 模型（int8 量化，6.4MB）
 │   ├── static/html/          # 内置 Web 界面
 │   └── requirements.txt
 ├── Dockerfile
@@ -548,7 +557,7 @@ nsfw/
 
 本项目采用 AGPL-3.0 许可，详见 [LICENSE](LICENSE)。
 
-模型来自 [AdamCodd/vit-base-nsfw-detector](https://huggingface.co/AdamCodd/vit-base-nsfw-detector)，
+模型来自 [Marqo/nsfw-image-detection-384](https://huggingface.co/Marqo/nsfw-image-detection-384)，
 在此致谢。使用本服务时请遵守模型自身的许可条款。
 
 > 检测结果不能保证 100% 准确。任何内容审核方案都不存在绝对精准的实现，

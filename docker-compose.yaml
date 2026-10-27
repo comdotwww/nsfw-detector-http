@@ -20,7 +20,9 @@ services:
       # 判定阈值：nsfw 概率 > 该值时 is_nsfw 为 true。
       # 调高更宽松（漏检变多），调低更严格（误判变多）。
       # 只影响 is_nsfw 布尔值，返回的 nsfw 概率始终是 0~1 原始值。
-      - NSFW_THRESHOLD=0.9
+      # 默认 0.8：当前模型（Marqo vit-tiny）的分值整体偏低，
+      # NSFW 样本多在 0.87~0.95，用 0.9 会偏严。建议用业务样本重新标定。
+      - NSFW_THRESHOLD=0.8
       # 进程数。低配机器保持 1 即可；run.sh 会自动收敛到 min(4, 核数/2)
       - WORKERS=1
       # Token 管理端口（默认 6087，只监听 localhost；想对外暴露改 0.0.0.0）

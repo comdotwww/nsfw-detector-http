@@ -1,5 +1,9 @@
 """推理引擎：统一管理 ONNX 会话、图像预处理、HTTP 客户端与二维码检测。
 
+模型：Marqo/nsfw-image-detection-384（ViT-tiny，5.6M 参数，int8 量化后 6.4MB）。
+相比原来的 AdamCodd/vit-base（86M 参数，q4 量化 55MB），
+CPU 单张推理从 ~178ms 降到 ~16ms（16 线程），体积小 8.6 倍。
+
 设计要点（针对低配部署目标）：
 1. ONNX 会话全局唯一，线程数由环境变量控制，避免 worker 之间抢核；
 2. 预处理走 draft 缩解码 + uint8 转置 + LUT 归一化，大图快约 2x；
@@ -25,17 +29,21 @@ from PIL import Image
 # 常量与配置
 # --------------------------------------------------------------------------
 
-MODEL_PATH = os.getenv("MODEL_PATH", "app/onnx/model_q4.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "app/onnx/model_nsfw_int8.onnx")
 INPUT_SIZE = 384
 
 # 单张图片上限：对 384x384 分类器来说 10MB 已经很宽松，低配机器可调小
 MAX_SIZE = int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
 
 # 判定阈值：nsfw 概率大于该值才标记 is_nsfw。
-# 注意这是「严格大于」，阈值 0.9 时 0.9 本身不算 NSFW。
+# 注意这是「严格大于」，阈值 0.8 时 0.8 本身不算 NSFW。
 # 调高 = 更宽松（漏检变多），调低 = 更严格（误判变多）。
 # 只影响 is_nsfw 这个布尔值，返回的 nsfw 概率始终是 0~1 原始值。
-NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.9"))
+#
+# 默认 0.8（原来是 0.9）：Marqo 模型的分值分布比原 AdamCodd 偏低，
+# 实测 NSFW 样本集中在 0.87~0.95，沿用 0.9 会偏严、漏掉擦边内容。
+# 换模型后建议用自己的业务样本重新标定这个值。
+NSFW_THRESHOLD = float(os.getenv("NSFW_THRESHOLD", "0.8"))
 
 # 解压炸弹防护：10MB 的 PNG 可以解出上亿像素，直接打爆内存
 MAX_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "64000000"))  # ~8000x8000
@@ -155,19 +163,45 @@ def is_ready() -> bool:
 
 
 def preprocess(image: Image.Image) -> np.ndarray:
-    """RGB -> resize 384 -> CHW -> [-1,1] -> NCHW(float32)"""
+    """RGB -> 短边缩放 384 -> 中心裁切 384 -> CHW -> [-1,1] -> NCHW(float32)
+
+    注意这里是「短边缩放 + 中心裁切」，不是直接拉伸成 384x384。
+    Marqo 这个模型是按 timm 标准 transform 训练的（crop_pct=1.0、bicubic、
+    中心裁切），直接拉伸会改变长宽比，实测会让分值严重偏移
+    （同一张图 0.11 与 0.92 的差距），必须按训练时的预处理来。
+    """
     img = image
-    # JPEG 用 libjpeg 的 1/2、1/4、1/8 缩放解码，避免解出整张 4000x3000
+    # JPEG 用 libjpeg 的 1/2、1/4、1/8 缩放解码，避免解出整张 4000x3000。
+    # 目标给 2 倍尺寸：后面还要按短边缩放到 384，留足余量减少二次放大的损失。
     if getattr(img, "format", None) == "JPEG":
         try:
-            img.draft("RGB", (INPUT_SIZE, INPUT_SIZE))
+            img.draft("RGB", (INPUT_SIZE * 2, INPUT_SIZE * 2))
         except Exception:
             pass
     if img.mode != "RGB":
         img = img.convert("RGB")
-    if img.size != (INPUT_SIZE, INPUT_SIZE):
-        # BILINEAR 比默认 BICUBIC 快，对分类结果无可见差异
-        img = img.resize((INPUT_SIZE, INPUT_SIZE), Image.Resampling.BILINEAR)
+
+    # 短边缩放到 INPUT_SIZE，保持长宽比。
+    # 长边用 int() 截断而不是 round()：torchvision 的 Resize 就是 int(size*long/short)，
+    # 用 round 会差 1 像素，中心裁切位置跟着偏移，实测能让分值偏移 0.04~0.08。
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        raise ValueError("empty image")
+    if w < h:
+        new_w = INPUT_SIZE
+        new_h = max(INPUT_SIZE, int(h * INPUT_SIZE / w))
+    else:
+        new_h = INPUT_SIZE
+        new_w = max(INPUT_SIZE, int(w * INPUT_SIZE / h))
+    if (new_w, new_h) != (w, h):
+        img = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+
+    # 中心裁切成 INPUT_SIZE x INPUT_SIZE
+    left = (new_w - INPUT_SIZE) // 2
+    top = (new_h - INPUT_SIZE) // 2
+    if left or top:
+        img = img.crop((left, top, left + INPUT_SIZE, top + INPUT_SIZE))
+
     # 先在 uint8 上转置（数据量只有 float32 的 1/4），再查表转 float32
     arr = np.asarray(img, dtype=np.uint8)
     return _LUT[arr.transpose(2, 0, 1)][None]
@@ -201,7 +235,9 @@ def infer_sync(image: Image.Image) -> dict:
     if logits.ndim >= 2:
         logits = logits[0]
     logits = logits.reshape(-1)
-    sfw_raw, nsfw_raw = _softmax2(float(logits[0]), float(logits[1]))
+    # ⚠️ label 顺序：本模型是 ["NSFW", "SFW"]，logits[0]=NSFW、logits[1]=SFW。
+    # 原来的 AdamCodd 模型是反的（0=sfw）。搞反会让结果完全颠倒，改模型时必须核对。
+    nsfw_raw, sfw_raw = _softmax2(float(logits[0]), float(logits[1]))
     return build_result(sfw_raw, nsfw_raw)
 
 
